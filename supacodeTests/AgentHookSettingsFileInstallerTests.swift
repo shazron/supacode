@@ -34,7 +34,7 @@ struct AgentHookSettingsFileInstallerTests {
           "hooks": .array([
             .object([
               "type": "command",
-              "command": .string(AgentHookSettingsCommand.busyCommand(active: false)),
+              "command": .string(AgentHookSettingsCommand.eventCommand(event: .idle, agent: .claude)),
               "timeout": 10,
             ])
           ])
@@ -202,13 +202,13 @@ struct AgentHookSettingsFileInstallerTests {
     let groups = sampleHookGroups()
     try installer.install(settingsURL: url, hookGroupsByEvent: groups)
 
-    #expect(installer.containsMatchingHooks(settingsURL: url, hookGroupsByEvent: groups))
+    #expect(installer.installState(settingsURL: url, hookGroupsByEvent: groups) == .installed)
   }
 
   @Test func containsMatchingHooksReturnsFalseWhenMissing() {
     let url = makeTempURL()
     let installer = makeInstaller()
-    #expect(!installer.containsMatchingHooks(settingsURL: url, hookGroupsByEvent: sampleHookGroups()))
+    #expect(installer.installState(settingsURL: url, hookGroupsByEvent: sampleHookGroups()) != .installed)
   }
 
   @Test func containsMatchingHooksLogsInvalidJSONErrors() throws {
@@ -230,7 +230,7 @@ struct AgentHookSettingsFileInstallerTests {
       }
     )
 
-    #expect(!installer.containsMatchingHooks(settingsURL: url, hookGroupsByEvent: sampleHookGroups()))
+    #expect(installer.installState(settingsURL: url, hookGroupsByEvent: sampleHookGroups()) != .installed)
     #expect(warnings.value.count == 1)
     #expect(warnings.value[0].contains(url.path))
   }
@@ -246,7 +246,7 @@ struct AgentHookSettingsFileInstallerTests {
       }
     )
 
-    #expect(!installer.containsMatchingHooks(settingsURL: url, hookGroupsByEvent: sampleHookGroups()))
+    #expect(installer.installState(settingsURL: url, hookGroupsByEvent: sampleHookGroups()) != .installed)
     #expect(warnings.value.isEmpty)
   }
 

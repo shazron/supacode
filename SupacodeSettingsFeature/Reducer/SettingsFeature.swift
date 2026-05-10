@@ -5,6 +5,40 @@ import SupacodeSettingsShared
 
 @Reducer
 public struct SettingsFeature {
+  /// Lifecycle of the bundled `supacode` CLI install. Lives on the
+  /// SettingsFeature state because that's the only owner; nesting keeps
+  /// it out of the shared models package.
+  public enum CLIInstallState: Equatable, Sendable {
+    case checking
+    case installed
+    case notInstalled
+    case installing
+    case uninstalling
+    case failed(String)
+
+    public var isLoading: Bool {
+      switch self {
+      case .checking, .installing, .uninstalling: true
+      default: false
+      }
+    }
+
+    public var isInstalled: Bool {
+      if case .installed = self { return true }
+      return false
+    }
+
+    public var isFailure: Bool {
+      if case .failed = self { return true }
+      return false
+    }
+
+    public var errorMessage: String? {
+      guard case .failed(let message) = self else { return nil }
+      return message
+    }
+  }
+
   @ObservableState
   public struct State: Equatable {
     public var appearanceMode: AppearanceMode
@@ -35,18 +69,11 @@ public struct SettingsFeature {
     public var autoDeleteArchivedWorktreesAfterDays: AutoDeletePeriod?
     public var shortcutOverrides: [AppShortcutID: AppShortcutOverride]
     public var globalScripts: [ScriptDefinition]
-    public var cliInstallState = AgentHooksInstallState.checking
-    public var claudeSkillState = AgentHooksInstallState.checking
-    public var codexSkillState = AgentHooksInstallState.checking
-    public var claudeProgressState = AgentHooksInstallState.checking
-    public var claudeNotificationsState = AgentHooksInstallState.checking
-    public var codexProgressState = AgentHooksInstallState.checking
-    public var codexNotificationsState = AgentHooksInstallState.checking
-    public var kiroProgressState = AgentHooksInstallState.checking
-    public var kiroNotificationsState = AgentHooksInstallState.checking
-    public var kiroSkillState = AgentHooksInstallState.checking
-    public var piHooksState = AgentHooksInstallState.checking
-    public var piSkillState = AgentHooksInstallState.checking
+    public var richAgentNotificationsEnabled: Bool
+    public var agentPresenceBadgesEnabled: Bool
+    public var cliInstallState = CLIInstallState.checking
+    /// Aggregate per-agent install state for the unified integration row.
+    public var agentIntegrationStates: [SkillAgent: AgentIntegrationRowState] = [:]
     /// `nil` when the settings window is closed; non-nil selects the visible section.
     public var selection: SettingsSection?
     public var repositorySummaries: [SettingsRepositorySummary] = []
@@ -82,6 +109,8 @@ public struct SettingsFeature {
       autoDeleteArchivedWorktreesAfterDays = settings.autoDeleteArchivedWorktreesAfterDays
       shortcutOverrides = settings.shortcutOverrides
       globalScripts = settings.globalScripts
+      richAgentNotificationsEnabled = settings.richAgentNotificationsEnabled
+      agentPresenceBadgesEnabled = settings.agentPresenceBadgesEnabled
       defaultWorktreeBaseDirectoryPath =
         SupacodePaths.normalizedWorktreeBaseDirectoryPath(settings.defaultWorktreeBaseDirectoryPath) ?? ""
     }
@@ -117,7 +146,9 @@ public struct SettingsFeature {
         ),
         autoDeleteArchivedWorktreesAfterDays: autoDeleteArchivedWorktreesAfterDays,
         shortcutOverrides: shortcutOverrides,
-        globalScripts: globalScripts
+        globalScripts: globalScripts,
+        richAgentNotificationsEnabled: richAgentNotificationsEnabled,
+        agentPresenceBadgesEnabled: agentPresenceBadgesEnabled
       )
     }
   }
@@ -139,14 +170,11 @@ public struct SettingsFeature {
     case cliInstallTapped
     case cliUninstallTapped
     case cliInstallCompleted(Result<Bool, Error>)
-    case cliSkillChecked(agent: SkillAgent, installed: Bool)
-    case cliSkillInstallTapped(SkillAgent)
-    case cliSkillUninstallTapped(SkillAgent)
-    case cliSkillCompleted(SkillAgent, Result<Bool, Error>)
-    case agentHookChecked(AgentHookSlot, installed: Bool)
-    case agentHookInstallTapped(AgentHookSlot)
-    case agentHookUninstallTapped(AgentHookSlot)
-    case agentHookActionCompleted(AgentHookSlot, Result<Bool, Error>)
+    case refreshAgentIntegrationStates
+    case agentIntegrationChecked(SkillAgent, AgentIntegrationState)
+    case agentIntegrationInstallTapped(SkillAgent)
+    case agentIntegrationUninstallTapped(SkillAgent)
+    case agentIntegrationCompleted(SkillAgent, Result<AgentIntegrationState, Error>)
     case repositorySettings(RepositorySettingsFeature.Action)
     case addGlobalScript
     case removeGlobalScript(ScriptDefinition.ID)
@@ -169,11 +197,7 @@ public struct SettingsFeature {
 
   @Dependency(AnalyticsClient.self) private var analyticsClient
   @Dependency(CLIInstallerClient.self) private var cliInstallerClient
-  @Dependency(CLISkillClient.self) private var cliSkillClient
-  @Dependency(ClaudeSettingsClient.self) private var claudeSettingsClient
-  @Dependency(CodexSettingsClient.self) private var codexSettingsClient
-  @Dependency(KiroSettingsClient.self) private var kiroSettingsClient
-  @Dependency(PiSettingsClient.self) private var piSettingsClient
+  @Dependency(AgentIntegrationClient.self) private var agentIntegrationClient
   @Dependency(ArchivedWorktreeDatesClient.self) private var archivedWorktreeDatesClient
   @Dependency(SystemNotificationClient.self) private var systemNotificationClient
   @Dependency(\.date.now) private var now
@@ -193,38 +217,21 @@ public struct SettingsFeature {
               let installed = await cliInstallerClient.checkInstalled()
               await send(.cliInstallChecked(installed: installed))
             },
-            .run { [cliSkillClient] send in
-              async let claude = cliSkillClient.checkInstalled(.claude)
-              async let codex = cliSkillClient.checkInstalled(.codex)
-              async let kiro = cliSkillClient.checkInstalled(.kiro)
-              async let piSkill = cliSkillClient.checkInstalled(.pi)
-              await send(.cliSkillChecked(agent: .claude, installed: await claude))
-              await send(.cliSkillChecked(agent: .codex, installed: await codex))
-              await send(.cliSkillChecked(agent: .kiro, installed: await kiro))
-              await send(.cliSkillChecked(agent: .pi, installed: await piSkill))
-            },
-            .run { [claudeSettingsClient, codexSettingsClient, kiroSettingsClient, piSettingsClient] send in
-              async let claudeProgressInstalled = claudeSettingsClient.checkInstalled(true)
-              async let claudeNotificationsInstalled = claudeSettingsClient.checkInstalled(false)
-              async let codexProgressInstalled = codexSettingsClient.checkInstalled(true)
-              async let codexNotificationsInstalled = codexSettingsClient.checkInstalled(false)
-              async let kiroProgressInstalled = kiroSettingsClient.checkInstalled(true)
-              async let kiroNotificationsInstalled = kiroSettingsClient.checkInstalled(false)
-              async let piHooksInstalled = piSettingsClient.checkInstalled()
-
-              await send(.agentHookChecked(.claudeProgress, installed: await claudeProgressInstalled))
-              await send(
-                .agentHookChecked(.claudeNotifications, installed: await claudeNotificationsInstalled))
-              await send(.agentHookChecked(.codexProgress, installed: await codexProgressInstalled))
-              await send(
-                .agentHookChecked(.codexNotifications, installed: await codexNotificationsInstalled))
-              await send(.agentHookChecked(.kiroProgress, installed: await kiroProgressInstalled))
-              await send(
-                .agentHookChecked(.kiroNotifications, installed: await kiroNotificationsInstalled))
-              await send(.agentHookChecked(.piHooks, installed: await piHooksInstalled))
-            }
+            .send(.refreshAgentIntegrationStates)
           )
         )
+
+      case .refreshAgentIntegrationStates:
+        return .run { [agentIntegrationClient] send in
+          await withTaskGroup(of: (SkillAgent, AgentIntegrationState).self) { group in
+            for agent in SkillAgent.allCases {
+              group.addTask { (agent, await agentIntegrationClient.state(agent)) }
+            }
+            for await (agent, integrationState) in group {
+              await send(.agentIntegrationChecked(agent, integrationState))
+            }
+          }
+        }
 
       case .settingsLoaded(let settings):
         let normalizedDefaultEditorID = OpenWorktreeAction.normalizedDefaultEditorID(settings.defaultEditorID)
@@ -270,6 +277,8 @@ public struct SettingsFeature {
         state.autoDeleteArchivedWorktreesAfterDays = normalizedSettings.autoDeleteArchivedWorktreesAfterDays
         state.shortcutOverrides = normalizedSettings.shortcutOverrides
         state.globalScripts = normalizedSettings.globalScripts
+        state.richAgentNotificationsEnabled = normalizedSettings.richAgentNotificationsEnabled
+        state.agentPresenceBadgesEnabled = normalizedSettings.agentPresenceBadgesEnabled
         state.defaultWorktreeBaseDirectoryPath = normalizedSettings.defaultWorktreeBaseDirectoryPath ?? ""
         state.syncGlobalDefaults(from: normalizedSettings)
         synchronizeRepositorySelection(for: &state)
@@ -354,92 +363,45 @@ public struct SettingsFeature {
         state.cliInstallState = .failed(error.localizedDescription)
         return .none
 
-      case .cliSkillChecked(let agent, let installed):
-        state[skillAgent: agent] = installed ? .installed : .notInstalled
+      case .agentIntegrationChecked(let agent, let integrationState):
+        state.agentIntegrationStates[agent] = .ready(integrationState)
         return .none
 
-      case .cliSkillInstallTapped(let agent):
-        guard !state[skillAgent: agent].isLoading else { return .none }
-        state[skillAgent: agent] = .installing
-        return .run { [cliSkillClient] send in
+      case .agentIntegrationInstallTapped(let agent):
+        state.agentIntegrationStates[agent] = .installing
+        return .run { [agentIntegrationClient] send in
           do {
-            try await cliSkillClient.install(agent)
-            await send(.cliSkillCompleted(agent, .success(true)))
+            try await agentIntegrationClient.install(agent)
+            let next = await agentIntegrationClient.state(agent)
+            await send(.agentIntegrationCompleted(agent, .success(next)))
           } catch {
-            await send(.cliSkillCompleted(agent, .failure(error)))
+            await send(.agentIntegrationCompleted(agent, .failure(error)))
           }
         }
+        // Cancel an in-flight install for the same agent if Settings
+        // is closed/reopened mid-flight — otherwise two effects could
+        // race the same `~/.codex/hooks.json` read-modify-write.
+        .cancellable(id: AgentIntegrationCancelID(agent: agent), cancelInFlight: true)
 
-      case .cliSkillUninstallTapped(let agent):
-        guard !state[skillAgent: agent].isLoading else { return .none }
-        state[skillAgent: agent] = .uninstalling
-        return .run { [cliSkillClient] send in
+      case .agentIntegrationUninstallTapped(let agent):
+        state.agentIntegrationStates[agent] = .uninstalling
+        return .run { [agentIntegrationClient] send in
           do {
-            try await cliSkillClient.uninstall(agent)
-            await send(.cliSkillCompleted(agent, .success(false)))
+            try await agentIntegrationClient.uninstall(agent)
+            let next = await agentIntegrationClient.state(agent)
+            await send(.agentIntegrationCompleted(agent, .success(next)))
           } catch {
-            await send(.cliSkillCompleted(agent, .failure(error)))
+            await send(.agentIntegrationCompleted(agent, .failure(error)))
           }
         }
+        .cancellable(id: AgentIntegrationCancelID(agent: agent), cancelInFlight: true)
 
-      case .cliSkillCompleted(let agent, .success(let installed)):
-        state[skillAgent: agent] = installed ? .installed : .notInstalled
+      case .agentIntegrationCompleted(let agent, .success(let integrationState)):
+        state.agentIntegrationStates[agent] = .ready(integrationState)
         return .none
 
-      case .cliSkillCompleted(let agent, .failure(let error)):
-        state[skillAgent: agent] = .failed(error.localizedDescription)
-        return .none
-
-      case .agentHookChecked(let slot, let installed):
-        state[hookSlot: slot] = installed ? .installed : .notInstalled
-        return .none
-
-      case .agentHookInstallTapped(let slot):
-        guard !state[hookSlot: slot].isLoading else { return .none }
-        state[hookSlot: slot] = .installing
-        return .run { [claudeSettingsClient, codexSettingsClient, kiroSettingsClient, piSettingsClient] send in
-          do {
-            switch slot {
-            case .claudeProgress: try await claudeSettingsClient.installProgress()
-            case .claudeNotifications: try await claudeSettingsClient.installNotifications()
-            case .codexProgress: try await codexSettingsClient.installProgress()
-            case .codexNotifications: try await codexSettingsClient.installNotifications()
-            case .kiroProgress: try await kiroSettingsClient.installProgress()
-            case .kiroNotifications: try await kiroSettingsClient.installNotifications()
-            case .piHooks: try await piSettingsClient.install()
-            }
-            await send(.agentHookActionCompleted(slot, .success(true)))
-          } catch {
-            await send(.agentHookActionCompleted(slot, .failure(error)))
-          }
-        }
-
-      case .agentHookUninstallTapped(let slot):
-        guard !state[hookSlot: slot].isLoading else { return .none }
-        state[hookSlot: slot] = .uninstalling
-        return .run { [claudeSettingsClient, codexSettingsClient, kiroSettingsClient, piSettingsClient] send in
-          do {
-            switch slot {
-            case .claudeProgress: try await claudeSettingsClient.uninstallProgress()
-            case .claudeNotifications: try await claudeSettingsClient.uninstallNotifications()
-            case .codexProgress: try await codexSettingsClient.uninstallProgress()
-            case .codexNotifications: try await codexSettingsClient.uninstallNotifications()
-            case .kiroProgress: try await kiroSettingsClient.uninstallProgress()
-            case .kiroNotifications: try await kiroSettingsClient.uninstallNotifications()
-            case .piHooks: try await piSettingsClient.uninstall()
-            }
-            await send(.agentHookActionCompleted(slot, .success(false)))
-          } catch {
-            await send(.agentHookActionCompleted(slot, .failure(error)))
-          }
-        }
-
-      case .agentHookActionCompleted(let slot, .success(let installed)):
-        state[hookSlot: slot] = installed ? .installed : .notInstalled
-        return .none
-
-      case .agentHookActionCompleted(let slot, .failure(let error)):
-        state[hookSlot: slot] = .failed(error.localizedDescription)
+      case .agentIntegrationCompleted(let agent, .failure(let error)):
+        state.agentIntegrationStates[agent] = .failed(error.localizedDescription)
         return .none
 
       case .updateShortcut(let id, let override):
@@ -636,6 +598,12 @@ public struct SettingsFeature {
   }
 }
 
+/// Cancellation key for in-flight integration install/uninstall effects so
+/// the next tap (or a fresh Settings open) supersedes the prior one.
+private nonisolated struct AgentIntegrationCancelID: Hashable, Sendable {
+  let agent: SkillAgent
+}
+
 extension SettingsFeature.State {
   mutating func syncGlobalDefaults(from settings: GlobalSettings) {
     repositorySettings?.globalDefaultWorktreeBaseDirectoryPath =
@@ -648,47 +616,4 @@ extension SettingsFeature.State {
       settings.pullRequestMergeStrategy
   }
 
-  subscript(skillAgent agent: SkillAgent) -> AgentHooksInstallState {
-    get {
-      switch agent {
-      case .claude: claudeSkillState
-      case .codex: codexSkillState
-      case .kiro: kiroSkillState
-      case .pi: piSkillState
-      }
-    }
-    set {
-      switch agent {
-      case .claude: claudeSkillState = newValue
-      case .codex: codexSkillState = newValue
-      case .kiro: kiroSkillState = newValue
-      case .pi: piSkillState = newValue
-      }
-    }
-  }
-
-  subscript(hookSlot slot: AgentHookSlot) -> AgentHooksInstallState {
-    get {
-      switch slot {
-      case .claudeProgress: claudeProgressState
-      case .claudeNotifications: claudeNotificationsState
-      case .codexProgress: codexProgressState
-      case .codexNotifications: codexNotificationsState
-      case .kiroProgress: kiroProgressState
-      case .kiroNotifications: kiroNotificationsState
-      case .piHooks: piHooksState
-      }
-    }
-    set {
-      switch slot {
-      case .claudeProgress: claudeProgressState = newValue
-      case .claudeNotifications: claudeNotificationsState = newValue
-      case .codexProgress: codexProgressState = newValue
-      case .codexNotifications: codexNotificationsState = newValue
-      case .kiroProgress: kiroProgressState = newValue
-      case .kiroNotifications: kiroNotificationsState = newValue
-      case .piHooks: piHooksState = newValue
-      }
-    }
-  }
 }

@@ -12,49 +12,39 @@ nonisolated struct ClaudeSettingsInstaller {
     self.fileManager = fileManager
   }
 
-  func isInstalled(progress: Bool) -> Bool {
+  /// Combined progress + notification install state. Used by the unified
+  /// integration so the file installer's prune step covers every event the
+  /// integration writes — eliminating stale duplicates left by older
+  /// Supacode versions.
+  func installState() -> ComponentInstallState {
     let groups: [String: [JSONValue]]
     do {
-      groups =
-        try progress
-        ? ClaudeHookSettings.progressHookGroupsByEvent()
-        : ClaudeHookSettings.notificationHookGroupsByEvent()
+      groups = try ClaudeHookSettings.allHooksByEvent()
     } catch {
-      Self.reportInvalidHookConfiguration(error, progress: progress)
-      return false
+      Self.reportInvalidAllHookConfiguration(error)
+      return .notInstalled
     }
-    return fileInstaller.containsMatchingHooks(
-      settingsURL: settingsURL,
-      hookGroupsByEvent: groups
-    )
+    return fileInstaller.installState(settingsURL: settingsURL, hookGroupsByEvent: groups)
   }
 
-  func installProgressHooks() throws {
+  func installAllHooks() throws {
     try fileInstaller.install(
       settingsURL: settingsURL,
-      hookGroupsByEvent: try ClaudeHookSettings.progressHookGroupsByEvent()
+      hookGroupsByEvent: try ClaudeHookSettings.allHooksByEvent()
     )
   }
 
-  func installNotificationHooks() throws {
-    try fileInstaller.install(
-      settingsURL: settingsURL,
-      hookGroupsByEvent: try ClaudeHookSettings.notificationHookGroupsByEvent()
-    )
-  }
-
-  func uninstallProgressHooks() throws {
+  func uninstallAllHooks() throws {
     try fileInstaller.uninstall(
       settingsURL: settingsURL,
-      hookGroupsByEvent: try ClaudeHookSettings.progressHookGroupsByEvent()
+      hookGroupsByEvent: try ClaudeHookSettings.allHooksByEvent()
     )
   }
 
-  func uninstallNotificationHooks() throws {
-    try fileInstaller.uninstall(
-      settingsURL: settingsURL,
-      hookGroupsByEvent: try ClaudeHookSettings.notificationHookGroupsByEvent()
-    )
+  private static func reportInvalidAllHookConfiguration(_ error: Error) {
+    #if DEBUG
+      assertionFailure("Claude hook configuration is invalid: \(error)")
+    #endif
   }
 
   private var settingsURL: URL {
@@ -65,12 +55,6 @@ nonisolated struct ClaudeSettingsInstaller {
     homeDirectoryURL
       .appendingPathComponent(".claude", isDirectory: true)
       .appendingPathComponent("settings.json", isDirectory: false)
-  }
-
-  private static func reportInvalidHookConfiguration(_ error: Error, progress: Bool) {
-    #if DEBUG
-      assertionFailure("Claude \(progress ? "progress" : "notification") hook configuration is invalid: \(error)")
-    #endif
   }
 
   private var fileInstaller: AgentHookSettingsFileInstaller {
