@@ -71,16 +71,34 @@ struct SidebarItemFeatureTests {
       agent: .claude,
       activity: .busy
     )
-    await store.send(.agentSnapshotChanged([instance], hasActivity: true)) {
-      $0.agents = [instance]
-      $0.hasAgentActivity = true
+    await store.send(.agentSnapshotChanged(.init(agents: [instance], isWorking: true))) {
+      $0.agentSnapshot = .init(agents: [instance], isWorking: true)
     }
     // Same payload: no-op.
-    await store.send(.agentSnapshotChanged([instance], hasActivity: true))
-    // hasActivity flip only.
-    await store.send(.agentSnapshotChanged([instance], hasActivity: false)) {
-      $0.hasAgentActivity = false
+    await store.send(.agentSnapshotChanged(.init(agents: [instance], isWorking: true)))
+    // isWorking flip only.
+    await store.send(.agentSnapshotChanged(.init(agents: [instance], isWorking: false))) {
+      $0.agentSnapshot = .init(agents: [instance], isWorking: false)
     }
+  }
+
+  @Test func agentErrorFlagTracksSnapshot() async {
+    let store = TestStore(initialState: makeState(name: "feature")) {
+      SidebarItemFeature()
+    }
+    let errored = AgentPresenceFeature.AgentInstance(agent: .claude, activity: .error)
+    await store.send(.agentSnapshotChanged(.init(agents: [errored], hasError: true))) {
+      $0.agentSnapshot = .init(agents: [errored], hasError: true)
+    }
+    #expect(store.state.hasAgentError)
+
+    // A restart clears it and puts the row back to work.
+    let busy = AgentPresenceFeature.AgentInstance(agent: .claude, activity: .busy)
+    await store.send(.agentSnapshotChanged(.init(agents: [busy], isWorking: true))) {
+      $0.agentSnapshot = .init(agents: [busy], isWorking: true)
+    }
+    #expect(!store.state.hasAgentError)
+    #expect(store.state.hasAgentActivity)
   }
 
   // MARK: - Terminal projection per-field guards.

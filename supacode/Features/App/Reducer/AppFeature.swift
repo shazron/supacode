@@ -1438,6 +1438,12 @@ struct AppFeature {
       case .terminalEvent(.agentHookEventReceived(let event)):
         return .send(.agentPresence(.hookEventReceived(event)))
 
+      // The user is looking at this surface, so whatever was parked on them there
+      // is acknowledged. Scoped to the focused surface, so a broken session in
+      // another split of the same worktree keeps its warning.
+      case .terminalEvent(.focusChanged(_, let surfaceID)):
+        return .send(.agentPresence(.clearAttention(surfaces: [surfaceID])))
+
       case .terminalEvent:
         return .none
       }
@@ -1539,14 +1545,11 @@ struct AppFeature {
     var affectedSurfaces: Set<UUID> = []
     for rowID in rowIDs {
       guard let row = state.repositories.sidebarItems[id: rowID] else { continue }
-      let agents = presence.agents(across: row.surfaceIDs, badgesEnabled: badgesEnabled)
-      let hasActivity = presence.hasActivity(in: row.surfaceIDs)
+      let snapshot = presence.rowSnapshot(across: row.surfaceIDs, badgesEnabled: badgesEnabled)
       effects.append(
         .send(
           .repositories(
-            .sidebarItems(
-              .element(id: rowID, action: .agentSnapshotChanged(agents, hasActivity: hasActivity))
-            )
+            .sidebarItems(.element(id: rowID, action: .agentSnapshotChanged(snapshot)))
           )
         )
       )
