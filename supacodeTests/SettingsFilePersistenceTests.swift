@@ -452,9 +452,9 @@ struct SettingsFilePersistenceTests {
     #expect(settings.global.remoteSessionPersistenceEnabled == true)
   }
 
-  @Test(.dependencies) func decodesMissingAppVisibilityAsDock() throws {
-    // A file predating the menu bar feature was Dock-only, and the menu bar
-    // stays opt-in.
+  @Test(.dependencies) func decodesMissingAppVisibilityAsDefault() throws {
+    // A file predating the menu bar feature falls through to the default, which
+    // now shows the menu bar too.
     let legacy = LegacySettingsFile(
       global: LegacyGlobalSettings(
         appearanceMode: .dark,
@@ -473,10 +473,10 @@ struct SettingsFilePersistenceTests {
       return settings
     }
 
-    #expect(settings.global.appVisibility == .dock)
+    #expect(settings.global.appVisibility == .dockAndMenuBar)
   }
 
-  @Test(.dependencies) func decodesUnrecognizedAppVisibilityAsDockWithoutDiscardingTheFile() throws {
+  @Test(.dependencies) func decodesUnrecognizedAppVisibilityAsDefaultWithoutDiscardingTheFile() throws {
     // A throw here would reset the whole file to defaults and write it back, so
     // a hand-edited or newer-than-us value must fall through to the default.
     let file = SettingsFileWithRawAppVisibility(
@@ -484,7 +484,7 @@ struct SettingsFilePersistenceTests {
         appearanceMode: .light,
         updatesAutomaticallyCheckForUpdates: false,
         updatesAutomaticallyDownloadUpdates: false,
-        appVisibility: "menubar"
+        appVisibility: "bogus"
       ),
       repositories: [:]
     )
@@ -498,13 +498,13 @@ struct SettingsFilePersistenceTests {
       return settings
     }
 
-    #expect(settings.global.appVisibility == .dock)
+    #expect(settings.global.appVisibility == .dockAndMenuBar)
     // Both differ from `GlobalSettings.default`, so a reset-to-defaults would fail here.
     #expect(settings.global.appearanceMode == .light)
     #expect(settings.global.updatesAutomaticallyCheckForUpdates == false)
   }
 
-  @Test(.dependencies) func decodesMistypedAppVisibilityAsDockWithoutDiscardingTheFile() throws {
+  @Test(.dependencies) func decodesMistypedAppVisibilityAsDefaultWithoutDiscardingTheFile() throws {
     // A hand-edit can produce the wrong JSON type, not just an unknown string.
     let json = """
       {"global":{"appearanceMode":"light","updatesAutomaticallyCheckForUpdates":false,\
@@ -519,7 +519,7 @@ struct SettingsFilePersistenceTests {
       return settings
     }
 
-    #expect(settings.global.appVisibility == .dock)
+    #expect(settings.global.appVisibility == .dockAndMenuBar)
     #expect(settings.global.appearanceMode == .light)
   }
 
