@@ -13,6 +13,7 @@ struct TerminalTabView: View {
   /// observation-tracked fields (agents, unseen count, progress display) so
   /// per-tab mutations invalidate only this leaf, not sibling tabs.
   let tabStore: StoreOf<TerminalTabFeature>
+  let isLifecycleBusy: Bool
   let onSelect: () -> Void
   let onClose: () -> Void
   let onDismissSplitZoom: () -> Void
@@ -39,6 +40,8 @@ struct TerminalTabView: View {
         tab: tab,
         isActive: isActive,
         tabStore: tabStore,
+        // Workspace-only lifecycle work has no owning surface; represent it on the selected tab only.
+        isLifecycleRepresentative: isActive && isLifecycleBusy,
       )
       .allowsHitTesting(false)
       // The select button already carries the tab's label, so this would double-announce it.
@@ -182,12 +185,20 @@ struct TerminalTabView: View {
         editingTitle = tab.displayTitle
         initialEditingTitle = tab.displayTitle
         cancelOnExit = false
-        isFieldFocused = true
       } else if cancelOnExit {
         cancelOnExit = false
       } else if editingTitle != initialEditingTitle {
         onRename(editingTitle)
       }
+    }
+    // The double-click's Button action focuses the terminal after its gesture
+    // fires. Defer one turn so the replacement field wins; tying the task to
+    // edit state cancels a stale focus request when editing ends first.
+    .task(id: isEditing) {
+      guard isEditing else { return }
+      await Task.yield()
+      guard !Task.isCancelled else { return }
+      isFieldFocused = true
     }
     .onDisappear {
       guard isEditing else { return }
