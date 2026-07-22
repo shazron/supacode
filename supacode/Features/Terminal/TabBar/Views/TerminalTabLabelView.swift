@@ -5,8 +5,6 @@ import SwiftUI
 struct TerminalTabLabelView: View {
   let tab: TerminalTabItem
   let isActive: Bool
-  let isHoveringTab: Bool
-  let isHoveringClose: Bool
   /// Per-tab scoped store. The badge subview observes `state.agents` here
   /// instead of iterating worktree-wide presence, so an agent storm on tab B
   /// doesn't invalidate tab A's label body.
@@ -31,9 +29,6 @@ struct TerminalTabLabelView: View {
       Spacer(minLength: TerminalTabBarMetrics.contentTrailingSpacing)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-    .contentShape(.rect)
-    .padding(.horizontal, TerminalTabBarMetrics.tabHorizontalPadding)
-    .padding(.trailing, TerminalTabBarMetrics.trailingSlotWidth + TerminalTabBarMetrics.contentSpacing)
   }
 }
 
